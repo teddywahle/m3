@@ -1054,9 +1054,10 @@ func (i *nsIndex) canFlushBlockWithRLock(
 	case series.WarmWrite:
 		// NB(bodu): We should always attempt to warm flush sealed blocks to disk if
 		// there doesn't already exist data on disk. We're checking this instead of
-		// `block.NeedsMutableSegmentsEvicted()` since bootstrap writes for cold block starts
-		// get marked as warm writes if there doesn't already exist data on disk and need to
-		// properly go through the warm flush lifecycle.
+		// if the index block has mutable segments that we can evict
+		// (original check implemented in `block.NeedsMutableSegmentsEvicted()`) since bootstrap writes for
+		// cold block starts get marked as warm writes if there doesn't already exist data
+		// on disk so they need to properly go through the warm flush lifecycle.
 		if !block.IsSealed() || i.hasIndexWarmFlushedToDisk(infoFiles, blockStart) {
 			return false, nil
 		}
@@ -1117,7 +1118,7 @@ func (i *nsIndex) flushBlock(
 		allShards[shard.ID()] = struct{}{}
 	}
 
-	preparedPersist, err := flush.PrepareIndex(persist.IndexPrepareOptions{
+	preparedPersist, err := flush.PrepareIndexFlush(persist.IndexPrepareOptions{
 		NamespaceMetadata: i.nsMetadata,
 		BlockStart:        indexBlock.StartTime(),
 		FileSetType:       persist.FileSetFlushType,
@@ -1152,7 +1153,7 @@ func (i *nsIndex) flushBlock(
 }
 
 func (i *nsIndex) flushBlockSegment(
-	preparedPersist persist.PreparedIndexPersist,
+	preparedPersist persist.PreparedIndexFlushPersist,
 	indexBlock index.Block,
 	shards []databaseShard,
 	builder segment.DocumentsBuilder,
@@ -1952,6 +1953,11 @@ func (i *nsIndex) DebugMemorySegments(opts DebugMemorySegmentsOptions) error {
 		FilesystemOptions().
 		SetFilePathPrefix(opts.OutputDirectory)
 
+	segDataWriter, err := idxpersist.NewFSTSegmentDataFileSetWriter()
+	if err != nil {
+		return err
+	}
+
 	for _, block := range i.state.blocksByTime {
 		segmentsData, err := block.MemorySegmentsData(ctx)
 		if err != nil {
@@ -1959,6 +1965,7 @@ func (i *nsIndex) DebugMemorySegments(opts DebugMemorySegmentsOptions) error {
 		}
 
 		for numSegment, segmentData := range segmentsData {
+
 			indexWriter, err := fs.NewIndexWriter(fsOpts)
 			if err != nil {
 				return err
@@ -1981,12 +1988,11 @@ func (i *nsIndex) DebugMemorySegments(opts DebugMemorySegmentsOptions) error {
 				return err
 			}
 
-			segWriter, err := idxpersist.NewFSTSegmentDataFileSetWriter(segmentData)
-			if err != nil {
+			if err := segDataWriter.Reset(segmentData); err != nil {
 				return err
 			}
 
-			if err := indexWriter.WriteSegmentFileSet(segWriter); err != nil {
+			if err := indexWriter.WriteSegmentFileSet(segDataWriter); err != nil {
 				return err
 			}
 
