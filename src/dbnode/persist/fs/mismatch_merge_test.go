@@ -237,3 +237,84 @@ func TestLoadNextValidIndexHashBlockExhaustedInput(t *testing.T) {
 	_, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
 	assert.Equal(t, errFinishedStreaming, err)
 }
+
+func TestLoadNextValidIndexHashBlockValid(t *testing.T) {
+	bl := ident.IndexHashBlock{
+		Marker:      []byte("zztop"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl})
+	reader := newEntryReaders(idxEntry(10, "abc"))
+	require.True(t, reader.next())
+
+	// NB: nothing written to output.
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{})
+	defer wg.Wait()
+
+	nextBlock, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
+	assert.NoError(t, err)
+	assert.Equal(t, bl, nextBlock)
+
+	// NB: outStream not closed in this path; close explicitly.
+	close(outStream)
+}
+
+func TestLoadNextValidIndexHashBlockSkipThenValid(t *testing.T) {
+	bl1 := ident.IndexHashBlock{
+		Marker:      []byte("aardvark"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2)},
+	}
+
+	bl2 := ident.IndexHashBlock{
+		Marker:      []byte("zztop"),
+		IndexHashes: []ident.IndexHash{idxHash(3), idxHash(4)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2})
+	reader := newEntryReaders(idxEntry(10, "abc"))
+	require.True(t, reader.next())
+
+	// NB: entire first block should be ONLY_ON_PRIMARY.
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+	})
+	defer wg.Wait()
+
+	nextBlock, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
+	assert.NoError(t, err)
+	assert.Equal(t, bl2, nextBlock)
+
+	// NB: outStream not closed in this path; close explicitly.
+	close(outStream)
+}
+
+func TestLoadNextValidIndexHashBlockSkipsExhaustive(t *testing.T) {
+	bl1 := ident.IndexHashBlock{
+		Marker:      []byte("aardvark"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2)},
+	}
+
+	bl2 := ident.IndexHashBlock{
+		Marker:      []byte("abc"),
+		IndexHashes: []ident.IndexHash{idxHash(3), idxHash(4)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2})
+	reader := newEntryReaders(idxEntry(10, "zztop"))
+	require.True(t, reader.next())
+
+	// NB: entire first block should be ONLY_ON_PRIMARY.
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+		mismatch(MismatchOnlyOnPrimary, 3, nil),
+		mismatch(MismatchOnlyOnPrimary, 4, nil),
+		mismatch(MismatchOnlyOnSecondary, 10, []byte("zztop")),
+	})
+	defer wg.Wait()
+
+	_, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
+	assert.Equal(t, errFinishedStreaming, err)
+}

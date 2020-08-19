@@ -139,51 +139,60 @@ func loadNextValidIndexHashBlock(
 			return ident.IndexHashBlock{}, errFinishedStreaming
 		}
 
-		if compare := bytes.Compare(batch.Marker, curr.entry.ID); compare < 0 {
+		if compare := bytes.Compare(batch.Marker, curr.entry.ID); compare > 0 {
 			// NB: current element is before the current MARKER element;
 			// this is a valid index hash block for comparison.
 			return batch, nil
-		} else if compare == 0 {
-			// NB: edge case: the last (i.e. MARKER) element is the first one in the
-			// index batch to match the current element.
-			lastIdx := len(batch.IndexHashes) - 1
-
-			// NB: sanity check that matching IDs <=> matching ID hash.
-			if err := validate(
-				curr.entry, batch.Marker, curr.idHash,
-				batch.IndexHashes[lastIdx].IDHash,
-			); err != nil {
-				return ident.IndexHashBlock{}, err
-			}
-
-			for i, idxHash := range batch.IndexHashes {
-				// NB: Mark all preceeding entries as ONLY_PRIMARY mismatches.
-				if lastIdx != i {
-					outStream <- ReadMismatch{
-						Type:     MismatchOnlyOnPrimary,
-						Checksum: idxHash.DataChecksum,
-						IDHash:   idxHash.IDHash,
-					}
-
-					continue
+		} else if compare < 0 {
+			// NB: all elements from the current idxHashBatch are before hte current
+			// element; mark all elements in batch as ONLY_ON_PRIMARY and fetch the
+			// next idxHashBatch.
+			for _, c := range batch.IndexHashes {
+				outStream <- ReadMismatch{
+					Type:     MismatchOnlyOnPrimary,
+					Checksum: c.DataChecksum,
+					IDHash:   c.IDHash,
 				}
-
-				compareData(curr, idxHash.DataChecksum, outStream)
 			}
 
-			// Finished iterating through entry reader, drain any remaining entries
-			// and return.
-			if !r.next() {
-				drainRemainingBlockStreamAndClose(batch.IndexHashes, inStream, outStream)
-				return ident.IndexHashBlock{}, errFinishedStreaming
-			}
-
-			curr = r.current()
+			continue
 		}
 
-		// NB: all elements from the current idxHashBatch are exhausted; wait
-		// for the next element to be streamed in and check to see if the new
-		// block is valid to read from.
+		// NB: the last (i.e. MARKER) element is the first one in the index batch
+		// to match the current element.
+		lastIdx := len(batch.IndexHashes) - 1
+
+		// NB: sanity check that matching IDs <=> matching ID hash.
+		if err := validate(
+			curr.entry, batch.Marker, curr.idHash,
+			batch.IndexHashes[lastIdx].IDHash,
+		); err != nil {
+			return ident.IndexHashBlock{}, err
+		}
+
+		for i, idxHash := range batch.IndexHashes {
+			// NB: Mark all preceeding entries as ONLY_PRIMARY mismatches.
+			if lastIdx != i {
+				outStream <- ReadMismatch{
+					Type:     MismatchOnlyOnPrimary,
+					Checksum: idxHash.DataChecksum,
+					IDHash:   idxHash.IDHash,
+				}
+
+				continue
+			}
+
+			compareData(curr, idxHash.DataChecksum, outStream)
+		}
+
+		// Finished iterating through entry reader, drain any remaining entries
+		// and return.
+		if !r.next() {
+			drainRemainingBlockStreamAndClose(batch.IndexHashes, inStream, outStream)
+			return ident.IndexHashBlock{}, errFinishedStreaming
+		}
+
+		curr = r.current()
 	}
 }
 
