@@ -102,11 +102,20 @@ func readRemainingReadersAndClose(
 }
 
 func validate(c schema.IndexEntry, marker []byte, id, hID uint64) error {
-	// TODO: use a proper invariant here
-	if hID != id {
-		return fmt.Errorf("invariant error, hashes for %s(%d) and %s(%d) mismatch",
-			string(c.ID), id, string(marker), hID)
+	idMatch := bytes.Compare(c.ID, marker) == 0
+	hashMatch := hID == id
+
+	if idMatch && !hashMatch {
+		// TODO: use a proper invariant here
+		return fmt.Errorf(`invariant error: id "%s" hashed to both %d and %d`,
+			string(c.ID), id, hID)
 	}
+
+	if !idMatch && hashMatch {
+		return fmt.Errorf(`hash collision: "%s" and "%s" both hash to %d`,
+			string(c.ID), string(marker), hID)
+	}
+
 	return nil
 }
 
@@ -123,7 +132,8 @@ func compareData(e entry, dataChecksum uint32, outStream chan<- ReadMismatch) {
 func loadNextValidIndexHashBlock(
 	inStream <-chan ident.IndexHashBlock,
 	r entryReader,
-	outStream chan<- ReadMismatch) (ident.IndexHashBlock, error) {
+	outStream chan<- ReadMismatch,
+) (ident.IndexHashBlock, error) {
 	var (
 		batch ident.IndexHashBlock
 		ok    bool
@@ -188,7 +198,8 @@ func loadNextValidIndexHashBlock(
 		// Finished iterating through entry reader, drain any remaining entries
 		// and return.
 		if !r.next() {
-			drainRemainingBlockStreamAndClose(batch.IndexHashes, inStream, outStream)
+			// NB: current batch already drained; pass empty here instead.
+			drainRemainingBlockStreamAndClose([]ident.IndexHash{}, inStream, outStream)
 			return ident.IndexHashBlock{}, errFinishedStreaming
 		}
 
@@ -197,10 +208,20 @@ func loadNextValidIndexHashBlock(
 }
 
 func moveNext(
+	currentBatch []ident.IndexHash,
 	inStream <-chan ident.IndexHashBlock,
 	r entryReader,
-	outStream chan<- ReadMismatch) error {
+	outStream chan<- ReadMismatch,
+) error {
 	if !r.next() {
+		for _, c := range currentBatch {
+			outStream <- ReadMismatch{
+				Type:     MismatchOnlyOnPrimary,
+				Checksum: c.DataChecksum,
+				IDHash:   c.IDHash,
+			}
+		}
+
 		// NB: no values in the entry reader
 		batch, ok := <-inStream
 		if ok {
@@ -220,8 +241,9 @@ func moveNext(
 func mergeHelper(
 	inStream <-chan ident.IndexHashBlock,
 	r entryReader,
-	outStream chan<- ReadMismatch) error {
-	if err := moveNext(inStream, r, outStream); err != nil {
+	outStream chan<- ReadMismatch,
+) error {
+	if err := moveNext([]ident.IndexHash{}, inStream, r, outStream); err != nil {
 		return err
 	}
 
@@ -250,7 +272,8 @@ func mergeHelper(
 				compareData(entry, hash.DataChecksum, outStream)
 
 				// NB: get next reader element.
-				if err := moveNext(inStream, r, outStream); err != nil {
+				// NB:  All entries from current batch already computed.
+				if err := moveNext([]ident.IndexHash{}, inStream, r, outStream); err != nil {
 					return err
 				}
 
@@ -274,11 +297,20 @@ func mergeHelper(
 				// NB: current entry ID is before marker ID; mark the current entry
 				// as a ONLY_SECONDARY mismatch and move to next reader element.
 				outStream <- entry.toMismatch(MismatchOnlyOnSecondary)
-				if err := moveNext(inStream, r, outStream); err != nil {
+				if err := moveNext(batch.IndexHashes[batchIdx:], inStream, r, outStream); err != nil {
 					return err
 				}
 
 				continue
+			}
+
+			// NB: mark remaining in current batch as completed.
+			for _, c := range batch.IndexHashes[batchIdx:] {
+				outStream <- ReadMismatch{
+					Type:     MismatchOnlyOnPrimary,
+					Checksum: c.DataChecksum,
+					IDHash:   c.IDHash,
+				}
 			}
 
 			// NB: get next index hash block, and reset batch and marker indices.
@@ -306,6 +338,7 @@ func mergeHelper(
 		}
 
 		nextBatchIdx := batchIdx + 1
+		matched := false
 		for ; nextBatchIdx < markerIdx; nextBatchIdx++ {
 			// NB: read next hashes, checking for index checksum matches.
 			nextHash := batch.IndexHashes[nextBatchIdx]
@@ -329,9 +362,13 @@ func mergeHelper(
 					return nil
 				}
 
-				// NB: move to next element.
-				continue
+				matched = true
+				break
 			}
+		}
+
+		if matched {
+			continue
 		}
 
 		// NB: reached MATCHER point in the batch.
@@ -356,7 +393,8 @@ func mergeHelper(
 			compareData(entry, nextHash.DataChecksum, outStream)
 
 			// NB: get next reader element.
-			if err := moveNext(inStream, r, outStream); err != nil {
+			// NB:  All entries from current batch already computed.
+			if err := moveNext([]ident.IndexHash{}, inStream, r, outStream); err != nil {
 				return err
 			}
 
@@ -376,25 +414,29 @@ func mergeHelper(
 		if compare == 0 {
 			// NB: this is an error since hashed IDs mismatch here.
 			return validate(entry.entry, batch.Marker, entry.idHash, nextHash.IDHash)
-		} else if compare > 0 {
-			// NB: current entry ID is before marker ID; mark the current entry
-			// as a ONLY_SECONDARY mismatch and move to next reader element.
-			outStream <- entry.toMismatch(MismatchOnlyOnSecondary)
-			if err := moveNext(inStream, r, outStream); err != nil {
-				return err
-			}
-
-			continue
 		}
 
 		// NB: current entry ID is past marker ID; mark any remaining elements in
 		// current batch as ONLY_PRIMARY, and increment batch.
-		for _, c := range batch.IndexHashes[batchIdx:] {
+		for _, c := range batch.IndexHashes[batchIdx:markerIdx] {
 			outStream <- ReadMismatch{
 				Type:     MismatchOnlyOnPrimary,
 				Checksum: c.DataChecksum,
 				IDHash:   c.IDHash,
 			}
+		}
+
+		if compare > 0 {
+			// NB: current entry ID is before marker ID; mark the current entry
+			// as a ONLY_SECONDARY mismatch and move to next reader element.
+			outStream <- entry.toMismatch(MismatchOnlyOnSecondary)
+			// NB: get next reader element.
+			if err := moveNext(batch.IndexHashes[markerIdx:], inStream, r, outStream); err != nil {
+				return err
+			}
+
+			batchIdx++
+			continue
 		}
 
 		// NB: get next index hash block, and reset batch and marker indices.
@@ -411,7 +453,8 @@ func mergeHelper(
 func merge(
 	inStream <-chan ident.IndexHashBlock,
 	r entryReader,
-	outStream chan<- ReadMismatch) error {
+	outStream chan<- ReadMismatch,
+) error {
 	err := mergeHelper(inStream, r, outStream)
 	if err == nil {
 		return nil

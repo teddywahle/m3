@@ -23,6 +23,7 @@ package fs
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -175,7 +176,7 @@ func TestValidate(t *testing.T) {
 	assert.Error(t, err)
 
 	err = validate(schema.IndexEntry{ID: foo}, bar, 9, 9)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 }
 
 func TestCompareData(t *testing.T) {
@@ -195,17 +196,19 @@ func TestCompareData(t *testing.T) {
 
 func TestMoveNextWithRemainingInput(t *testing.T) {
 	inStream := buildDataInputStream([]ident.IndexHashBlock{
-		{IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2)}},
+		{IndexHashes: []ident.IndexHash{idxHash(3), idxHash(4)}},
 	})
 	reader := newEntryReaders(idxEntry(1, "abc"))
 	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
-		mismatch(MismatchOnlyOnPrimary, 1, nil),
 		mismatch(MismatchOnlyOnPrimary, 2, nil),
+		mismatch(MismatchOnlyOnPrimary, 3, nil),
+		mismatch(MismatchOnlyOnPrimary, 4, nil),
 	})
 	defer wg.Wait()
 
-	assert.NoError(t, moveNext(inStream, reader, outStream))
-	assert.Equal(t, errFinishedStreaming, moveNext(inStream, reader, outStream))
+	curr := []ident.IndexHash{idxHash(2)}
+	assert.NoError(t, moveNext(curr, inStream, reader, outStream))
+	assert.Equal(t, errFinishedStreaming, moveNext(curr, inStream, reader, outStream))
 	assertClosed(t, inStream)
 }
 
@@ -214,11 +217,14 @@ func TestMoveNextWithExhaustedInput(t *testing.T) {
 	close(inStream)
 
 	reader := newEntryReaders(idxEntry(1, "abc"))
-	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{})
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+	})
 	defer wg.Wait()
 
-	assert.NoError(t, moveNext(inStream, reader, outStream))
-	assert.Equal(t, errFinishedStreaming, moveNext(inStream, reader, outStream))
+	curr := []ident.IndexHash{idxHash(2)}
+	assert.NoError(t, moveNext(curr, inStream, reader, outStream))
+	assert.Equal(t, errFinishedStreaming, moveNext(curr, inStream, reader, outStream))
 }
 
 func TestLoadNextValidIndexHashBlockExhaustedInput(t *testing.T) {
@@ -248,16 +254,14 @@ func TestLoadNextValidIndexHashBlockValid(t *testing.T) {
 	reader := newEntryReaders(idxEntry(10, "abc"))
 	require.True(t, reader.next())
 
-	// NB: nothing written to output.
-	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{})
-	defer wg.Wait()
+	// NB: outStream not used in this path; close explicitly.
+	outStream, _ := buildExpectedOutputStream(t, ReadMismatches{})
+	close(outStream)
 
 	nextBlock, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
 	assert.NoError(t, err)
 	assert.Equal(t, bl, nextBlock)
 
-	// NB: outStream not closed in this path; close explicitly.
-	close(outStream)
 }
 
 func TestLoadNextValidIndexHashBlockSkipThenValid(t *testing.T) {
@@ -302,19 +306,266 @@ func TestLoadNextValidIndexHashBlockSkipsExhaustive(t *testing.T) {
 	}
 
 	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2})
-	reader := newEntryReaders(idxEntry(10, "zztop"))
+	reader := newEntryReaders(idxEntry(10, "zztop"), idxEntry(0, "zzz"))
 	require.True(t, reader.next())
 
-	// NB: entire first block should be ONLY_ON_PRIMARY.
+	// NB: entire first block should be ONLY_ON_PRIMARY,
+	// entire secondary block should be ONLY_ON_SECONDARY.
 	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
 		mismatch(MismatchOnlyOnPrimary, 1, nil),
 		mismatch(MismatchOnlyOnPrimary, 2, nil),
 		mismatch(MismatchOnlyOnPrimary, 3, nil),
 		mismatch(MismatchOnlyOnPrimary, 4, nil),
 		mismatch(MismatchOnlyOnSecondary, 10, []byte("zztop")),
+		mismatch(MismatchOnlyOnSecondary, 0, []byte("zzz")),
 	})
 	defer wg.Wait()
 
 	_, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
 	assert.Equal(t, errFinishedStreaming, err)
+}
+
+func TestLoadNextValidIndexHashBlockLastElementInvariant(t *testing.T) {
+	bl := ident.IndexHashBlock{
+		Marker:      []byte("abc"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl})
+	reader := newEntryReaders(idxEntry(10, "abc"))
+	require.True(t, reader.next())
+
+	// NB: outStream not used in this path; close explicitly.
+	outStream, _ := buildExpectedOutputStream(t, ReadMismatches{})
+	close(outStream)
+
+	_, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
+	assert.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "invariant"))
+}
+
+func TestLoadNextValidIndexHashBlockLastElementMatch(t *testing.T) {
+	bl := ident.IndexHashBlock{
+		Marker:      []byte("abc"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2), idxHash(3)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl})
+	reader := newEntryReaders(idxEntry(3, "abc"))
+	require.True(t, reader.next())
+
+	// NB: values preceeding MARKER in index hash are only on primary.
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+	})
+	defer wg.Wait()
+
+	_, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
+	assert.Equal(t, errFinishedStreaming, err)
+}
+
+func TestLoadNextValidIndexHashBlock(t *testing.T) {
+	bl1 := ident.IndexHashBlock{
+		Marker:      []byte("a"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2), idxHash(3)},
+	}
+
+	bl2 := ident.IndexHashBlock{
+		Marker:      []byte("b"),
+		IndexHashes: []ident.IndexHash{idxHash(4), idxHash(5)},
+	}
+
+	bl3 := ident.IndexHashBlock{
+		Marker:      []byte("d"),
+		IndexHashes: []ident.IndexHash{idxHash(6), idxHash(7)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2, bl3})
+	reader := newEntryReaders(idxEntry(5, "b"), idxEntry(10, "c"))
+	require.True(t, reader.next())
+
+	// Values preceeding MARKER in second index hash block are only on primary.
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+		mismatch(MismatchOnlyOnPrimary, 3, nil),
+		mismatch(MismatchOnlyOnPrimary, 4, nil),
+	})
+	defer wg.Wait()
+
+	bl, err := loadNextValidIndexHashBlock(inStream, reader, outStream)
+	assert.NoError(t, err)
+	assert.Equal(t, bl3, bl)
+
+	// NB: outStream not closed in this path; close explicitly.
+	close(outStream)
+}
+
+func TestMergeHelper(t *testing.T) {
+	bl1 := ident.IndexHashBlock{
+		Marker:      []byte("a"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2), idxHash(3)},
+	}
+
+	bl2 := ident.IndexHashBlock{
+		Marker:      []byte("b"),
+		IndexHashes: []ident.IndexHash{idxHash(4), idxHash(5)},
+	}
+
+	bl3 := ident.IndexHashBlock{
+		Marker:      []byte("z"),
+		IndexHashes: []ident.IndexHash{idxHash(6), idxHash(10)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2, bl3})
+	mismatched := entry{
+		entry: schema.IndexEntry{
+			DataChecksum: 88,
+			ID:           []byte("mismatch"),
+		},
+		idHash: 6,
+	}
+
+	reader := newEntryReaders(idxEntry(5, "b"), mismatched, idxEntry(7, "qux"))
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		// Values preceeding MARKER in second index hash block are only on primary.
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+		mismatch(MismatchOnlyOnPrimary, 3, nil),
+		mismatch(MismatchOnlyOnPrimary, 4, nil),
+		// Value at 5 matches, not in output.
+		// Value at 6 is a DATA_MISMATCH
+		ReadMismatch{Type: MismatchData, Checksum: 88, IDHash: 6, ID: ident.StringID("mismatch")},
+		// Value at 10 only on secondary.
+		mismatch(MismatchOnlyOnSecondary, 7, []byte("qux")),
+		// Value at 7 only on primary.
+		mismatch(MismatchOnlyOnPrimary, 10, nil),
+	})
+	defer wg.Wait()
+
+	err := mergeHelper(inStream, reader, outStream)
+	assert.Equal(t, errFinishedStreaming, err)
+}
+
+func TestMergeIntermittentBlock(t *testing.T) {
+	bl := ident.IndexHashBlock{
+		Marker:      []byte("z"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2), idxHash(3), idxHash(4)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl})
+	reader := newEntryReaders(
+		idxEntry(2, "n"),
+		idxEntry(4, "z"),
+	)
+
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		mismatch(MismatchOnlyOnPrimary, 3, nil),
+	})
+	defer wg.Wait()
+
+	err := merge(inStream, reader, outStream)
+	assert.NoError(t, err)
+}
+
+func TestMergeIntermittentBlockMismatch(t *testing.T) {
+	bl := ident.IndexHashBlock{
+		Marker:      []byte("z"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2), idxHash(3), idxHash(4)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl})
+	reader := newEntryReaders(
+		idxEntry(2, "n"),
+		idxEntry(5, "z"),
+	)
+
+	expectedErr := errors.New(`invariant error: id "z" hashed to both 5 and 4`)
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 1, nil),
+		ReadMismatch{Type: MismatchError, Err: expectedErr},
+	})
+	defer wg.Wait()
+
+	err := merge(inStream, reader, outStream)
+	assert.Equal(t, expectedErr, err)
+}
+
+func TestMergeTrailingBlock(t *testing.T) {
+	bl1 := ident.IndexHashBlock{
+		Marker:      []byte("m"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2)},
+	}
+
+	bl2 := ident.IndexHashBlock{
+		Marker:      []byte("z"),
+		IndexHashes: []ident.IndexHash{idxHash(3), idxHash(5)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2})
+	reader := newEntryReaders(
+		idxEntry(1, "a"),
+		idxEntry(4, "w"),
+	)
+
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+		mismatch(MismatchOnlyOnPrimary, 3, nil),
+		mismatch(MismatchOnlyOnSecondary, 4, []byte("w")),
+		mismatch(MismatchOnlyOnPrimary, 5, nil),
+	})
+	defer wg.Wait()
+
+	err := merge(inStream, reader, outStream)
+	assert.NoError(t, err)
+}
+
+func TestMerge(t *testing.T) {
+	bl1 := ident.IndexHashBlock{
+		Marker:      []byte("c"),
+		IndexHashes: []ident.IndexHash{idxHash(1), idxHash(2), idxHash(3)},
+	}
+
+	bl2 := ident.IndexHashBlock{
+		Marker:      []byte("f"),
+		IndexHashes: []ident.IndexHash{idxHash(4), idxHash(5)},
+	}
+
+	bl3 := ident.IndexHashBlock{
+		Marker:      []byte("p"),
+		IndexHashes: []ident.IndexHash{idxHash(6), idxHash(7), idxHash(8), idxHash(9)},
+	}
+
+	bl4 := ident.IndexHashBlock{
+		Marker:      []byte("z"),
+		IndexHashes: []ident.IndexHash{idxHash(11), idxHash(15)},
+	}
+
+	inStream := buildDataInputStream([]ident.IndexHashBlock{bl1, bl2, bl3, bl4})
+	missEntry := idxEntry(3, "c")
+	missEntry.entry.DataChecksum = 100
+	reader := newEntryReaders(
+		idxEntry(1, "a"),
+		missEntry,
+		idxEntry(7, "n"),
+		idxEntry(8, "p"),
+		idxEntry(9, "p"),
+		idxEntry(10, "q"),
+		idxEntry(15, "z"),
+	)
+	outStream, wg := buildExpectedOutputStream(t, ReadMismatches{
+		mismatch(MismatchOnlyOnPrimary, 2, nil),
+		ReadMismatch{Type: MismatchData, Checksum: 100, IDHash: 3, ID: ident.StringID("c")},
+		mismatch(MismatchOnlyOnPrimary, 4, nil),
+		mismatch(MismatchOnlyOnPrimary, 5, nil),
+		mismatch(MismatchOnlyOnPrimary, 6, nil),
+		mismatch(MismatchOnlyOnPrimary, 11, nil),
+		mismatch(MismatchOnlyOnSecondary, 10, []byte("q")),
+	})
+	defer wg.Wait()
+
+	err := merge(inStream, reader, outStream)
+	assert.NoError(t, err)
 }
