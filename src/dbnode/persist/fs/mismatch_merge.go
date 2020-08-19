@@ -41,9 +41,9 @@ func (e entry) toMismatch(t MismatchType) ReadMismatch {
 		Type:     t,
 		Checksum: uint32(e.entry.DataChecksum),
 		IDHash:   e.idHash,
-		Data:     nil, // TODO: add these correctly.
-		Tags:     nil, // TODO: add these correctly.
-		ID:       nil, // TODO: add these correctly.
+		Data:     nil,                       // TODO: add these correctly.
+		Tags:     nil,                       // TODO: add these correctly.
+		ID:       ident.BytesID(e.entry.ID), // TODO: pool these correctly.
 	}
 }
 
@@ -52,10 +52,23 @@ type entryReader interface {
 	current() entry
 }
 
+func reportErrorDrainAndClose(
+	err error,
+	inStream <-chan ident.IndexHashBlock,
+	outStream chan<- ReadMismatch,
+) {
+	outStream <- ReadMismatch{Type: MismatchError, Err: err}
+	close(outStream)
+	for range inStream {
+		// no-op, drain input stream.
+	}
+}
+
 func drainRemainingBlockStreamAndClose(
 	currentBatch []ident.IndexHash,
 	inStream <-chan ident.IndexHashBlock,
-	outStream chan<- ReadMismatch) {
+	outStream chan<- ReadMismatch,
+) {
 	drain := func(hashes []ident.IndexHash) {
 		for _, c := range hashes {
 			outStream <- ReadMismatch{
@@ -75,24 +88,14 @@ func drainRemainingBlockStreamAndClose(
 	close(outStream)
 }
 
-func reportErrorDrainAndClose(
-	err error,
-	inStream <-chan ident.IndexHashBlock,
-	outStream chan<- ReadMismatch) {
-	outStream <- ReadMismatch{Type: MismatchError, Err: err}
-	close(outStream)
-	for range inStream {
-		// no-op, drain input stream.
-	}
-}
-
 func readRemainingReadersAndClose(
 	current entry,
 	reader entryReader,
-	outStream chan<- ReadMismatch) {
-	outStream <- current.toMismatch(MismatchOnlyOnPrimary)
+	outStream chan<- ReadMismatch,
+) {
+	outStream <- current.toMismatch(MismatchOnlyOnSecondary)
 	for reader.next() {
-		outStream <- reader.current().toMismatch(MismatchOnlyOnPrimary)
+		outStream <- reader.current().toMismatch(MismatchOnlyOnSecondary)
 	}
 
 	close(outStream)
