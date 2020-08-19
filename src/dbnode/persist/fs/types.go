@@ -630,3 +630,42 @@ type Segments interface {
 	AbsoluteFilePaths() []string
 	BlockStart() time.Time
 }
+
+// MismatchType indicates the reason for the mismatch.
+type MismatchType uint8
+
+const (
+	// MismatchNone is the default value when there is no mismatch.
+	MismatchNone MismatchType = iota
+	// MismatchOnlyOnPrimary indicates this index was not found in the summary.
+	MismatchOnlyOnPrimary
+	// MismatchOnlyOnSecondary indicates this index was not found in the fileset.
+	MismatchOnlyOnSecondary
+	// MismatchData indicates this index has a different data checksum
+	// between the expected checksum from the summary and the fileset.
+	MismatchData
+	// MismatchError indicates an execution error.
+	MismatchError
+)
+
+// ReadMismatch describes a metric that does not match a given summary,
+// with descriptor of the mismatch.
+type ReadMismatch struct {
+	// Type is the mismatch type.
+	Type MismatchType
+	// Checksum is the data checksum for the mismatched series.
+	Checksum uint32
+	// IDHash is the id hash for the mismatched series.
+	IDHash uint64
+	// Data is the data for this query.
+	// NB: only present for MismatchMissingInSummary and MismatchChecksumMismatch.
+	Data checked.Bytes
+	// Tags are the tags for this query.
+	// NB: only present for MismatchMissingInSummary and MismatchChecksumMismatch.
+	Tags ident.TagIterator
+	// ID is the ID for this query.
+	// NB: only present for MismatchMissingInSummary.
+	ID ident.ID
+	// Err is any error associated with this mismatch.
+	Err error
+}

@@ -319,6 +319,8 @@ type IndexHashBlock struct {
 	// IndexHashes is a list of blocks for this series, containing start times
 	// and data checksums.
 	IndexHashes []IndexHash
+	// Marker is a batch marker, signifying the ID of the last element in the batch.
+	Marker []byte
 }
 
 // IndexHash is a minimal summary of a series block.
@@ -327,4 +329,6 @@ type IndexHash struct {
 	BlockStart time.Time
 	// DataChecksum is the computed data checksum for this ID for this block.
 	DataChecksum uint32
+	// IDHash is a hash of the series ID.
+	IDHash uint64
 }
