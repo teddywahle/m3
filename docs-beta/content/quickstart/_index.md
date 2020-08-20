@@ -6,9 +6,16 @@ weight: 3
 
 ## Introduction to guide
 
-Includes what the guide covers, and a disclaimer that this is not suitable for production use. Explains what the docker image consists of and how these are often separate instances.
+Includes what the guide covers, and a disclaimer that this is not suitable for production use, and an overview of warnings you might expect to see when running on Docker for Mac/Windows. Explains what the docker image consists of and how these are often separate instances.
 
 Also covers the example use case for this (and other) example code, which is a microservices-based ecommerce example.
+
+## Prerequisites
+
+-   Docker
+    -   system requirements
+-   JQ (for formatting output, not essential)
+-   cURL or wget
 
 ## Starting Docker container
 
