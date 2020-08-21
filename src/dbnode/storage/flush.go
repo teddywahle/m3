@@ -146,7 +146,7 @@ func (m *flushManager) Flush(startTime time.Time) error {
 
 	rotatedCommitlogID, err := m.commitlog.RotateLogs()
 	if err == nil {
-		if err = m.dataSnapshot(namespaces, startTime, rotatedCommitlogID); err != nil {
+		if err = m.dataAndIndexSnapshot(namespaces, startTime, rotatedCommitlogID); err != nil {
 			multiErr = multiErr.Add(err)
 		}
 	} else {
@@ -196,7 +196,7 @@ func (m *flushManager) dataWarmFlush(
 	return multiErr.FinalError()
 }
 
-func (m *flushManager) dataSnapshot(
+func (m *flushManager) dataAndIndexSnapshot(
 	namespaces []databaseNamespace,
 	startTime time.Time,
 	rotatedCommitlogID persist.CommitLogFile,
