@@ -115,16 +115,41 @@ func CompareOutputsAndExpected(t *testing.T, step int, start time.Time, expected
 	}
 }
 
+type TestStorage interface {
+	getValues()
+	getStepMillis()
+}
+
 // MovingFunctionStorage is a special test construct for all moving functions
 type MovingFunctionStorage struct {
 	StepMillis     int
-	Bootstrap      []float64
 	Values         []float64
+	Bootstrap      []float64
 	BootstrapStart time.Time
 }
 
+func (m *MovingFunctionStorage) getStepMillis() (int) {
+	millis := m.StepMillis
+	return millis
+}
+
+func (m *MovingFunctionStorage) getValues() ([]float64) {
+	values := m.Values
+	return values
+}
+
+func (m *MovingFunctionStorage) getBootstrap() ([]float64) {
+	bootstrap := m.Bootstrap
+	return bootstrap
+}
+
+func (m *MovingFunctionStorage) getBootstrapStart() (time.Time) {
+	bootstrapStart := m.BootstrapStart
+	return bootstrapStart
+}
+
 // FetchByPath builds a new series from the input path
-func (s *MovingFunctionStorage) FetchByPath(
+func (s TestStorage) FetchByPath(
 	ctx context.Context,
 	path string,
 	opts storage.FetchOptions,
@@ -133,7 +158,7 @@ func (s *MovingFunctionStorage) FetchByPath(
 }
 
 // FetchByQuery builds a new series from the input query
-func (s *MovingFunctionStorage) FetchByQuery(
+func (s TestStorage) FetchByQuery(
 	ctx context.Context,
 	query string,
 	opts storage.FetchOptions,
@@ -142,21 +167,22 @@ func (s *MovingFunctionStorage) FetchByQuery(
 }
 
 // FetchByIDs builds a new series from the input query
-func (s *MovingFunctionStorage) fetchByIDs(
+func (s TestStorage) fetchByIDs(
 	ctx context.Context,
 	ids []string,
 	opts storage.FetchOptions,
 ) (*storage.FetchResult, error) {
 	var seriesList []*ts.Series
-	if s.Bootstrap != nil || s.Values != nil {
+
+	if s.getBootstrap() != nil || s.getValues() != nil {
 		var values []float64
-		if opts.StartTime.Equal(s.BootstrapStart) {
-			values = s.Bootstrap
+		if opts.StartTime.Equal(s.getBootstrapStart()) {
+			values = s.getBootstrap()
 		} else {
-			values = s.Values
+			values = s.getValues()
 		}
 		series := ts.NewSeries(ctx, ids[0], opts.StartTime,
-			NewTestSeriesValues(ctx, s.StepMillis, values))
+			NewTestSeriesValues(ctx, s.getStepMillis(), values))
 		seriesList = append(seriesList, series)
 	}
 
