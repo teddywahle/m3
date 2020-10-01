@@ -817,6 +817,7 @@ func movingAverage(ctx *common.Context, input singlePathSpec, windowSizeValue ge
 			results = append(results, newSeries)
 		}
 
+		fmt.Println("IN MOVING AVERAGE, return result of len: ", len(results))
 		original.Values = results
 		return original, nil
 	}

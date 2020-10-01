@@ -32,6 +32,7 @@ import (
 
 // Compile converts an input stream into the corresponding Expression.
 func Compile(input string) (Expression, error) {
+	fmt.Println("COmpiler called with input:", input)
 	booleanLiterals := map[string]lexer.TokenType{
 		"true":  lexer.True,
 		"false": lexer.False,
@@ -215,6 +216,8 @@ func (c *compiler) compileFunctionCall(fname string, nextToken *lexer.Token) (*f
 			fn.name, variadicComment, len(argTypes), len(args))
 	}
 
+	fmt.Println("here are these function args")
+	fmt.Println(args)
 	return &functionCall{f: fn, in: args}, nil
 }
 
@@ -329,6 +332,8 @@ func ExtractFetchExpressions(s string) ([]string, error) {
 
 	var targets []string
 	extractFetchExpressions(expr, &targets)
+	fmt.Println("Extracted these fetch expressions")
+	fmt.Println(targets)
 	return targets, nil
 }
 

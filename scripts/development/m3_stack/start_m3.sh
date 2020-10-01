@@ -373,3 +373,15 @@ if [[ "$USE_PROMETHEUS_HA" = true ]] ; then
 fi
 echo "Grafana available at localhost:3000"
 echo "Run ./stop.sh to shutdown nodes when done"
+
+while true; do t=$(date +%s);
+  echo "local.server1.pod1.get.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server1.pod2.get.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server2.pod1.get.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server2.pod2.get.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server1.pod1.put.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server1.pod2.put.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server2.pod1.put.request 10 $t" | nc 0.0.0.0 7204;
+  echo "local.server2.pod2.put.request 10 $t" | nc 0.0.0.0 7204;
+  sleep 30;
+done

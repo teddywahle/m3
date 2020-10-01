@@ -122,6 +122,10 @@ func divideSeriesHelper(ctx *common.Context, dividendSeries, divisorSeries *ts.S
 
 // divideSeries divides one series list by another single series
 func divideSeries(ctx *common.Context, dividendSeriesList, divisorSeriesList singlePathSpec) (ts.SeriesList, error) {
+	fmt.Println("TWAHLE_IN_DIVIDESERIESLIST")
+	fmt.Println("divisorSeriesList: Values, Len", divisorSeriesList.Values, len(divisorSeriesList.Values))
+	fmt.Println("dividendSeriesList: Values, Len", dividendSeriesList.Values, len(dividendSeriesList.Values))
+
 	if len(divisorSeriesList.Values) != 1 {
 		err := errors.NewInvalidParamsError(fmt.Errorf(
 			"divideSeries second argument must reference exactly one series but instead has %d",
