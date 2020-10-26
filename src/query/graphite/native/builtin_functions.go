@@ -295,7 +295,7 @@ func timeShift(
 	_ *common.Context,
 	_ singlePathSpec,
 	timeShiftS string,
-	_ bool,
+	resetEnd bool,
 	_ bool,
 ) (*unaryContextShifter, error) {
 
@@ -318,9 +318,15 @@ func timeShift(
 
 	transformerFn := func(input ts.SeriesList) (ts.SeriesList, error) {
 		output := make([]*ts.Series, input.Len())
-		for i, in := range input.Values {
+		for i, series := range input.Values {
 			// NB(jayp): opposite direction
-			output[i] = in.Shift(-1 * shift).RenamedTo(fmt.Sprintf("timeShift(%s, %s)", in.Name(), timeShiftS))
+			shiftedSeries := series.Shift(-1 * shift).RenamedTo(fmt.Sprintf("timeShift(%s, %s)", series.Name(), timeShiftS))
+			//if resetEnd == true {
+			//	shiftedSeries = ts
+			//} else {
+			//	//
+			//	//}
+			output[i] = shiftedSeries
 		}
 		input.Values = output
 		return input, nil

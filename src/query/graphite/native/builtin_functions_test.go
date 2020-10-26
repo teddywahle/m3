@@ -3281,6 +3281,41 @@ func TestTimeShift(t *testing.T) {
 		[]common.TestSeries{expected}, res.Values)
 }
 
+func TestTimeShiftOne(t *testing.T) {
+	ctrl := xgomock.NewController(t)
+	defer ctrl.Finish()
+
+	store := storage.NewMockStorage(ctrl)
+	engine := NewEngine(store)
+	startTime := time.Date(1970, time.January, 1, 0, 10, 00, 0, time.UTC)
+	endTime := time.Date(1970, time.January, 1, 0, 20, 00, 0, time.UTC)
+	ctx := common.NewContext(common.ContextOptions{
+		Start:  startTime,
+		End:    endTime,
+		Engine: engine,
+	})
+	defer ctx.Close()
+
+	stepSize := 60000
+	target := "timeShift(foo.bar.q.zed, '-10minutes', false)"
+
+	store.EXPECT().FetchByQuery(gomock.Any(), gomock.Any(), gomock.Any()).Return(
+		&storage.FetchResult{SeriesList: []*ts.Series{ts.NewSeries(ctx, "foo.bar.q.zed", startTime,
+			common.NewTestSeriesValues(ctx, 60000, []float64{0,1,2,3,4,5,6,7,8,9}))}}, nil)
+
+	expr, err := engine.Compile(target)
+	require.NoError(t, err)
+	res, err := expr.Execute(ctx)
+	require.NoError(t, err)
+	expected := common.TestSeries{
+		Name: "timeShift(foo.bar.q.zed, -10minutes)",
+		Data: []float64{math.NaN(),math.NaN(),math.NaN(),3,math.NaN(),5,6,math.NaN(),7,math.NaN(),math.NaN()},
+	}
+	common.CompareOutputsAndExpected(t, stepSize, endTime,
+		[]common.TestSeries{expected}, res.Values)
+}
+
+
 func TestDelay(t *testing.T) {
 	var values = [3][]float64{
 		{54.0, 48.0, 92.0, 54.0, 14.0, 1.2},
