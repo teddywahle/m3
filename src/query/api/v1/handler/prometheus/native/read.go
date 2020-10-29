@@ -27,7 +27,6 @@ import (
 	"github.com/m3db/m3/src/query/api/v1/handler"
 	"github.com/m3db/m3/src/query/api/v1/handler/prometheus/handleroptions"
 	"github.com/m3db/m3/src/query/api/v1/options"
-	"github.com/m3db/m3/src/query/models"
 	"github.com/m3db/m3/src/query/util/logging"
 	xhttp "github.com/m3db/m3/src/x/net/http"
 	xopentracing "github.com/m3db/m3/src/x/opentracing"
@@ -93,9 +92,6 @@ func newHandler(opts options.HandlerOptions, instant bool) http.Handler {
 		opts:            opts,
 		instant:         instant,
 	}
-
-	maxDatapoints := opts.Config().Limits.MaxComputedDatapoints()
-	h.promReadMetrics.maxDatapoints.Update(float64(maxDatapoints))
 	return h
 }
 
@@ -110,8 +106,8 @@ func (h *promReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parsedOptions, rErr := ParseRequest(ctx, r, h.instant, h.opts)
 	if rErr != nil {
 		h.promReadMetrics.fetchErrorsClient.Inc(1)
-		logger.Error("could not parse request", zap.Error(rErr.Inner()))
-		xhttp.Error(w, rErr.Inner(), rErr.Code())
+		logger.Error("could not parse request", zap.Error(rErr))
+		xhttp.WriteError(w, rErr)
 		return
 	}
 	ctx = logging.NewContext(ctx,
@@ -137,7 +133,7 @@ func (h *promReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			zap.Any("parsedOptions", parsedOptions))
 		h.promReadMetrics.fetchErrorsServer.Inc(1)
 
-		xhttp.Error(w, err, http.StatusInternalServerError)
+		xhttp.WriteError(w, err)
 		return
 	}
 
@@ -147,11 +143,6 @@ func (h *promReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if h.instant {
 		renderResultsInstantaneousJSON(w, result, h.opts.Config().ResultOptions.KeepNans)
-		return
-	}
-
-	if parsedOptions.Params.FormatType == models.FormatM3QL {
-		renderM3QLResultsJSON(w, result.Series, parsedOptions.Params)
 		return
 	}
 
